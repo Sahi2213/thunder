@@ -1,0 +1,122 @@
+import numpy as np
+import pandas as pd
+import seaborn as sns
+import matplotlib.pyplot as plt
+from sklearn.model_selection import KFold
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.linear_model import LogisticRegression
+from xgboost import XGBClassifier
+from sklearn.ensemble import StackingClassifier
+from sklearn.preprocessing import StandardScaler
+from sklearn.metrics import (accuracy_score, precision_score, recall_score, f1_score,
+                             confusion_matrix)
+import time
+import os
+
+# Read the dataset
+df = pd.read_csv('part-00001_preprocessed_dataset.csv')
+
+# Take 20% of the data
+df = df.sample(frac=0.2, random_state=42)
+
+# Rename the last column as 'label'
+df.rename(columns={df.columns[-1]: 'label'}, inplace=True)
+
+X = df.drop(columns=['label']).values
+y = df['label'].values
+
+# Feature scaling
+scaler = StandardScaler()
+X = scaler.fit_transform(X)
+
+# Define K-Folds cross-validation
+K_FOLDS = 5
+kf = KFold(n_splits=K_FOLDS, shuffle=True, random_state=42)
+
+# Create a directory for confusion matrices
+os.makedirs("confusion_matrices", exist_ok=True)
+
+# Define base classifiers
+base_classifiers = [
+    ('DecisionTree', DecisionTreeClassifier(max_depth=5, random_state=42)),
+    ('RandomForest', RandomForestClassifier(n_estimators=50, max_depth=5, random_state=42)),
+    ('KNN', KNeighborsClassifier(n_neighbors=7, weights='distance')),
+    ('LogisticRegression', LogisticRegression(max_iter=500, random_state=42))
+]
+
+# Define meta-classifier
+meta_classifier = XGBClassifier(n_estimators=100, learning_rate=0.1, random_state=42)
+
+# Define Stacking model
+stacking_model = StackingClassifier(
+    estimators=base_classifiers,
+    final_estimator=meta_classifier,
+    passthrough=True  # Include original features in meta-classifier training
+)
+
+# Store results
+results = []
+timing_results = []
+
+# Iterate over K-Folds
+fold_idx = 1
+for train_index, test_index in kf.split(X):
+    X_train, X_test = X[train_index], X[test_index]
+    y_train, y_test = y[train_index], y[test_index]
+
+    # Train the Stacking model
+    start_train_time = time.time()
+    stacking_model.fit(X_train, y_train)
+    train_time = time.time() - start_train_time
+
+    # Test the Stacking model
+    start_test_time = time.time()
+    y_pred = stacking_model.predict(X_test)
+    test_time = time.time() - start_test_time
+
+    # Record timing
+    timing_results.append({
+        'Fold': fold_idx,
+        'Classifier': 'New Stacking Model',
+        'Training Time (s)': train_time,
+        'Testing Time (s)': test_time,
+        'Total Time (s)': train_time + test_time
+    })
+
+    # Compute metrics
+    unique_classes = np.unique(y)
+    cm = confusion_matrix(y_test, y_pred, labels=unique_classes)
+
+    results.append({
+        'Fold': fold_idx,
+        'Classifier': 'New Stacking Model',
+        'Accuracy': accuracy_score(y_test, y_pred),
+        'Precision': precision_score(y_test, y_pred, average='weighted', zero_division=0),
+        'Recall': recall_score(y_test, y_pred, average='weighted'),
+        'F1 Score': f1_score(y_test, y_pred, average='weighted')
+    })
+
+    # Plot confusion matrix
+    plt.figure(figsize=(8, 6))
+    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', xticklabels=unique_classes, yticklabels=unique_classes)
+    plt.title(f"New Stacking Model - Fold {fold_idx} Confusion Matrix")
+    plt.xlabel("Predicted")
+    plt.ylabel("True")
+    plt.savefig(f"confusion_matrices/New_StackingModel_fold_{fold_idx}.png")
+    plt.close()
+
+    fold_idx += 1
+
+# Save results
+results_df = pd.DataFrame(results)
+results_df.to_csv("new_stacking_metrics.csv", index=False)
+
+timing_df = pd.DataFrame(timing_results)
+timing_df.to_csv("new_stacking_time.csv", index=False)
+
+print("Classification Metrics Across Folds:")
+print(results_df)
+
+
